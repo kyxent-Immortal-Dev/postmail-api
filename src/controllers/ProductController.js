@@ -26,7 +26,18 @@ class ProductController extends ProductAbstract {
         
         return baseCost * costMultiplier;
     }
-    
+
+    static async calculateTotalWeight(shipmentId, session) {
+        const products = await Product.find({ shipmentId }).session(session);
+        let totalWeight = 0;
+        
+        products.forEach(product => {
+            totalWeight += parseFloat(product.weight);
+        });
+        
+        return totalWeight;
+    }
+
     static async addProduct(req, res) {
         const session = await mongoose.startSession();
         session.startTransaction();
@@ -57,14 +68,6 @@ class ProductController extends ProductAbstract {
                 });
             }
             
-            const productController = new ProductController(
-                description, 
-                weight, 
-                packages, 
-                delivery_date, 
-                shipmentId
-            );
-            
             const user = await User.findById(shipment.userId).session(session);
             
             if (!user) {
@@ -75,6 +78,15 @@ class ProductController extends ProductAbstract {
                 });
             }
             
+            // Guardar el producto primero
+            const productController = new ProductController(
+                description, 
+                weight, 
+                packages, 
+                delivery_date, 
+                shipmentId
+            );
+            
             const product = new Product({
                 shipmentId,
                 ...productController.product
@@ -82,8 +94,60 @@ class ProductController extends ProductAbstract {
             
             await product.save({ session });
             
-            shipment.cost = productController.calculateCost(user.credits.cost);
+            // Calcular el peso total incluyendo el nuevo producto
+            const products = await Product.find({ shipmentId }).session(session);
+            let totalWeight = 0;
+            
+            products.forEach(prod => {
+                totalWeight += parseFloat(prod.weight);
+            });
+            
+            // Calcular el multiplicador según el peso total
+            let costMultiplier = 1;
+            if (totalWeight > 6) {
+                costMultiplier = 3; // Triple si sobrepasa 6lb
+            } else if (totalWeight > 3) {
+                costMultiplier = 2; // Doble si sobrepasa 3lb
+            }
+            
+            const baseCost = user.credits.cost;
+            const oldCost = shipment.cost;
+            const newCost = baseCost * costMultiplier;
+            
+            // Retornar los créditos del costo anterior si existe
+            if (oldCost > 0) {
+                user.credits.amount += oldCost;
+            }
+            
+            // Verificar si hay suficientes créditos para el nuevo costo
+            if (user.credits.amount < newCost) {
+                // Eliminar el producto recién creado
+                await Product.findByIdAndDelete(product._id).session(session);
+                
+                // Si había un costo anterior, restaurar ese costo al envío
+                if (oldCost > 0) {
+                    user.credits.amount -= oldCost;
+                    await user.save({ session });
+                }
+                
+                await session.abortTransaction();
+                session.endSession();
+                
+                return res.status(400).json({
+                    message: "Créditos insuficientes para este envío con el peso total",
+                    required: newCost,
+                    available: user.credits.amount,
+                    totalWeight: totalWeight
+                });
+            }
+            
+            // Actualizar el costo del envío
+            shipment.cost = newCost;
             await shipment.save({ session });
+            
+            // Descontar los créditos
+            user.credits.amount -= newCost;
+            await user.save({ session });
             
             await session.commitTransaction();
             session.endSession();
@@ -92,7 +156,10 @@ class ProductController extends ProductAbstract {
                 message: "Producto agregado exitosamente",
                 data: {
                     product,
-                    shipmentCost: shipment.cost
+                    totalWeight: totalWeight,
+                    shipmentCost: newCost,
+                    costMultiplier: costMultiplier,
+                    remainingCredits: user.credits.amount
                 }
             });
         } catch (error) {
@@ -197,6 +264,9 @@ class ProductController extends ProductAbstract {
     }
     
     static async deleteProduct(req, res) {
+        const session = await mongoose.startSession();
+        session.startTransaction();
+        
         try {
             const { productId } = req.params;
             
@@ -206,18 +276,65 @@ class ProductController extends ProductAbstract {
                 });
             }
             
-            const product = await Product.findByIdAndDelete(productId);
+            const product = await Product.findById(productId).session(session);
             
             if (!product) {
+                await session.abortTransaction();
+                session.endSession();
                 return res.status(404).json({
                     message: "Producto no encontrado"
                 });
             }
             
+            const shipmentId = product.shipmentId;
+            
+            await Product.findByIdAndDelete(productId).session(session);
+            
+            const shipment = await Shipment.findById(shipmentId).session(session);
+            const user = await User.findById(shipment.userId).session(session);
+            
+            const totalWeight = await ProductController.calculateTotalWeight(shipmentId, session);
+            
+
+            let costMultiplier = 1;
+            
+            if (totalWeight > 6) {
+                costMultiplier = 3;
+            } else if (totalWeight > 3) {
+                costMultiplier = 2;
+            }
+            
+            const baseCost = user.credits.cost;
+            const newCost = totalWeight > 0 ? baseCost * costMultiplier : 0;
+            
+
+            if (shipment.cost !== newCost) {
+                user.credits.amount += shipment.cost;
+                
+                shipment.cost = newCost;
+                await shipment.save({ session });
+                
+                if (newCost > 0) {
+                    user.credits.amount -= newCost;
+                }
+                
+                await user.save({ session });
+            }
+            
+            await session.commitTransaction();
+            session.endSession();
+            
             return res.status(200).json({
-                message: "Producto eliminado exitosamente"
+                message: "Producto eliminado exitosamente",
+                data: {
+                    totalWeight: totalWeight,
+                    updatedShipmentCost: shipment.cost,
+                    remainingCredits: user.credits.amount
+                }
             });
         } catch (error) {
+            await session.abortTransaction();
+            session.endSession();
             console.error("Error al eliminar producto:", error);
             return res.status(500).json({
                 message: "Error al eliminar el producto",

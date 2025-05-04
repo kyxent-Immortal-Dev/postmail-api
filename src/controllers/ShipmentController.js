@@ -186,7 +186,7 @@ class ShipmentController extends ShipmentAbstract {
             });
         }
     }
-    
+
     static async deleteShipment(req, res) {
         const session = await mongoose.startSession();
         session.startTransaction();
@@ -220,18 +220,35 @@ class ShipmentController extends ShipmentAbstract {
                 });
             }
             
+            // Guardar cuánto cuesta este envío para devolverlo
+            const shipmentCost = shipment.cost;
+            
+            // Devolver los créditos de envío
             user.credits.shipments += 1;
+            
+            // Devolver los créditos monetarios
+            if (shipmentCost > 0) {
+                user.credits.amount += shipmentCost;
+            }
+            
             await user.save({ session });
             
+            // Eliminar productos asociados al envío
             await Product.deleteMany({ shipmentId }).session(session);
             
+            // Eliminar el envío
             await Shipment.findByIdAndDelete(shipmentId).session(session);
             
             await session.commitTransaction();
             session.endSession();
             
             return res.status(200).json({
-                message: "Envío eliminado y crédito devuelto exitosamente"
+                message: "Envío eliminado y créditos devueltos exitosamente",
+                data: {
+                    creditosDevueltos: shipmentCost,
+                    creditosDisponibles: user.credits.amount,
+                    enviosDisponibles: user.credits.shipments
+                }
             });
         } catch (error) {
             await session.abortTransaction();
@@ -309,6 +326,8 @@ class ShipmentController extends ShipmentAbstract {
             });
         }
     }
+
+    
 }
 
 module.exports = {

@@ -78,6 +78,7 @@ class Server {
                 console.log('- DELETE /api/shipments/:shipmentId - Eliminar un envío');
                 console.log('- POST /api/shipments/:shipmentId/products - Agregar producto a un envío');
                 console.log('- GET /api/shipments/:shipmentId/products - Obtener productos de un envío');
+                
                 console.log('- PUT /api/products/:productId - Actualizar un producto');
                 console.log('- DELETE /api/products/:productId - Eliminar un producto');
             });
