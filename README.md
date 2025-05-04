@@ -158,3 +158,16 @@ DELETE /api/products/:productId
   - Clases abstractas para modelar los objetos del dominio
   - Controladores específicos para cada entidad
 
+- Logica de los envios:
+  - Cuando se crea un envio su valor inicial es de 4.5
+  - A medida que se le va agregando productos el valor del envio puede aumentar por el peso
+  - si el peso es igual o menor a 3 lb entonces el precio se mantiene a 4.5
+  - Si el peso es superior a 3 lb pero igual 6 lb el precio del envio se duplica entonces serian 9
+  - Si el peso es superior a 6 lb entonces el costo del envio se triplica entonces serian 13.5 y de alli queda fijo ya porque es el envio mas caro por asi decirlo
+  - ahora bien esto se va descontando de los creditos del usuario pero cuando se cancela osea se elimina el envio se le retorna el credito total previsto al usuario digamos que de los 135 iba ha hacer un envio de 13.5 entonces esos 13.5 se le retornan a su credito ya que se cancela la transaction
+
+- Logica de la data base (seed o semilla):
+  - He creado una seed para que automaticamente se cree un usuario y ha ese se le pueda asignar un tipo de credito
+  - segun el plan asi será el limite de creditos y envios
+  
+
