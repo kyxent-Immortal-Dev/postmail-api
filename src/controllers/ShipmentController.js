@@ -47,7 +47,7 @@ class ShipmentController extends ShipmentAbstract {
             });
         }
     }
-    
+
     static async createShipment(req, res) {
         const session = await mongoose.startSession();
         session.startTransaction();
@@ -86,6 +86,17 @@ class ShipmentController extends ShipmentAbstract {
                 });
             }
             
+
+            if (user.credits.amount < user.credits.cost) {
+                await session.abortTransaction();
+                session.endSession();
+                return res.status(400).json({
+                    message: "No tiene suficientes créditos monetarios para este envío",
+                    required: user.credits.cost,
+                    available: user.credits.amount
+                });
+            }
+            
             const shipmentController = new ShipmentController(
                 name, 
                 address, 
@@ -104,6 +115,9 @@ class ShipmentController extends ShipmentAbstract {
             await shipment.save({ session });
             
             user.credits.shipments -= 1;
+            
+            user.credits.amount -= user.credits.cost;
+            
             await user.save({ session });
             
             await session.commitTransaction();
@@ -111,14 +125,16 @@ class ShipmentController extends ShipmentAbstract {
             
             return res.status(201).json({
                 message: "Envío creado exitosamente",
-                data: shipment
+                data: {
+                    shipment,
+                    remainingCredits: user.credits.amount,
+                    remainingShipments: user.credits.shipments
+                }
             });
         } catch (error) {
             await session.abortTransaction();
             session.endSession();
-
             console.error("Error al crear envío:", error);
-
             return res.status(500).json({
                 message: "Error al crear el envío",
                 error: error.message
@@ -220,23 +236,18 @@ class ShipmentController extends ShipmentAbstract {
                 });
             }
             
-            // Guardar cuánto cuesta este envío para devolverlo
             const shipmentCost = shipment.cost;
             
-            // Devolver los créditos de envío
             user.credits.shipments += 1;
             
-            // Devolver los créditos monetarios
             if (shipmentCost > 0) {
                 user.credits.amount += shipmentCost;
             }
             
             await user.save({ session });
             
-            // Eliminar productos asociados al envío
             await Product.deleteMany({ shipmentId }).session(session);
             
-            // Eliminar el envío
             await Shipment.findByIdAndDelete(shipmentId).session(session);
             
             await session.commitTransaction();
@@ -245,7 +256,8 @@ class ShipmentController extends ShipmentAbstract {
             return res.status(200).json({
                 message: "Envío eliminado y créditos devueltos exitosamente",
                 data: {
-                    creditosDevueltos: shipmentCost,
+                    shipmentCost: shipmentCost,
+                    devueltoCreditos: shipmentCost,
                     creditosDisponibles: user.credits.amount,
                     enviosDisponibles: user.credits.shipments
                 }

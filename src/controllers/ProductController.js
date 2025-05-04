@@ -78,7 +78,7 @@ class ProductController extends ProductAbstract {
                 });
             }
             
-            // Guardar el producto primero
+
             const productController = new ProductController(
                 description, 
                 weight, 
@@ -94,7 +94,6 @@ class ProductController extends ProductAbstract {
             
             await product.save({ session });
             
-            // Calcular el peso total incluyendo el nuevo producto
             const products = await Product.find({ shipmentId }).session(session);
             let totalWeight = 0;
             
@@ -102,29 +101,25 @@ class ProductController extends ProductAbstract {
                 totalWeight += parseFloat(prod.weight);
             });
             
-            // Calcular el multiplicador según el peso total
             let costMultiplier = 1;
             if (totalWeight > 6) {
-                costMultiplier = 3; // Triple si sobrepasa 6lb
+                costMultiplier = 3;
             } else if (totalWeight > 3) {
-                costMultiplier = 2; // Doble si sobrepasa 3lb
+                costMultiplier = 2; 
             }
             
             const baseCost = user.credits.cost;
             const oldCost = shipment.cost;
             const newCost = baseCost * costMultiplier;
             
-            // Retornar los créditos del costo anterior si existe
+
             if (oldCost > 0) {
                 user.credits.amount += oldCost;
             }
             
-            // Verificar si hay suficientes créditos para el nuevo costo
             if (user.credits.amount < newCost) {
-                // Eliminar el producto recién creado
                 await Product.findByIdAndDelete(product._id).session(session);
                 
-                // Si había un costo anterior, restaurar ese costo al envío
                 if (oldCost > 0) {
                     user.credits.amount -= oldCost;
                     await user.save({ session });
@@ -141,11 +136,9 @@ class ProductController extends ProductAbstract {
                 });
             }
             
-            // Actualizar el costo del envío
             shipment.cost = newCost;
             await shipment.save({ session });
             
-            // Descontar los créditos
             user.credits.amount -= newCost;
             await user.save({ session });
             
@@ -197,7 +190,7 @@ class ProductController extends ProductAbstract {
             });
         }
     }
-    
+
     static async updateProduct(req, res) {
         const session = await mongoose.startSession();
         session.startTransaction();
@@ -222,6 +215,8 @@ class ProductController extends ProductAbstract {
                 });
             }
             
+            const oldWeight = parseFloat(product.weight);
+            
             if (description) product.description = description;
             if (weight) product.weight = weight;
             if (packages) product.packages = packages;
@@ -233,16 +228,45 @@ class ProductController extends ProductAbstract {
                 const shipment = await Shipment.findById(product.shipmentId).session(session);
                 const user = await User.findById(shipment.userId).session(session);
                 
-                const productController = new ProductController(
-                    product.description, 
-                    product.weight, 
-                    product.packages, 
-                    product.delivery_date, 
-                    product.shipmentId
-                );
+                if (shipment.cost > 0) {
+                    user.credits.amount += shipment.cost;
+                }
                 
-                shipment.cost = productController.calculateCost(user.credits.cost);
+                const totalWeight = await ProductController.calculateTotalWeight(product.shipmentId, session);
+                
+                let costMultiplier = 1;
+                if (totalWeight > 6) {
+                    costMultiplier = 3;
+                } else if (totalWeight > 3) {
+                    costMultiplier = 2;
+                }
+                
+                const baseCost = user.credits.cost;
+                const newCost = baseCost * costMultiplier;
+                
+                if (user.credits.amount < newCost) {
+
+                    product.weight = oldWeight;
+                    await product.save({ session });
+                    
+                    user.credits.amount -= shipment.cost;
+                    
+                    await session.abortTransaction();
+                    session.endSession();
+                    
+                    return res.status(400).json({
+                        message: "Créditos insuficientes para actualizar el producto",
+                        required: newCost,
+                        available: user.credits.amount,
+                        totalWeight: totalWeight
+                    });
+                }
+                
+                shipment.cost = newCost;
                 await shipment.save({ session });
+                
+                user.credits.amount -= newCost;
+                await user.save({ session });
             }
             
             await session.commitTransaction();
